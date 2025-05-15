@@ -1,4 +1,5 @@
 <?php
+
 /**
  * See https://developer.valvesoftware.com/wiki/Source_RCON_Protocol for
  * more information about Source RCON Packets
@@ -87,7 +88,7 @@ class Rcon
     public function disconnect()
     {
         if ($this->socket) {
-                    fclose($this->socket);
+            fclose($this->socket);
         }
     }
 
@@ -111,7 +112,7 @@ class Rcon
     public function sendCommand($command)
     {
         if (!$this->isConnected()) {
-                    return false;
+            return false;
         }
 
         // send command packet
@@ -173,40 +174,60 @@ class Rcon
 
         //create packet
         $packet = pack('VV', $packetId, $packetType);
-        $packet = $packet.$packetBody."\x00";
-        $packet = $packet."\x00";
+        $packet = $packet . $packetBody . "\x00";
+        $packet = $packet . "\x00";
 
         // get packet size.
         $packet_size = strlen($packet);
 
         // attach size to packet.
-        $packet = pack('V', $packet_size).$packet;
+        $packet = pack('V', $packet_size) . $packet;
 
         // write packet.
         fwrite($this->socket, $packet, strlen($packet));
     }
 
-    /**
-     * Read a packet from the socket stream.
-     *
-     * @return array
-     */
     private function readPacket()
     {
-        //get packet size.
-        $size_data = fread($this->socket, 4);
-        $size_pack = unpack('V1size', $size_data);
-        $size = $size_pack['size'];
+        $response = '';
+        $packetId = null;
+        $packetType = null;
 
-        // if size is > 4096, the response will be in multiple packets.
-        // this needs to be address. get more info about multi-packet responses
-        // from the RCON protocol specification at
-        // https://developer.valvesoftware.com/wiki/Source_RCON_Protocol
-        // currently, this script does not support multi-packet responses.
+        stream_set_timeout($this->socket, 2);
 
-        $packet_data = fread($this->socket, $size);
-        $packet_pack = unpack('V1id/V1type/a*body', $packet_data);
+        while (true) {
+            // Read 4 bytes for packet size
+            $size_data = fread($this->socket, 4);
+            if (strlen($size_data) !== 4) {
+                break;
+            }
 
-        return $packet_pack;
+            $size = unpack('V1size', $size_data)['size'];
+
+            // Read the full packet
+            $packet_data = fread($this->socket, $size);
+            if (strlen($packet_data) !== $size) {
+                break;
+            }
+
+            $packet = unpack('V1id/V1type/a*body', $packet_data);
+
+            // Store ID/type once (they should match across packets)
+            if ($packetId === null) $packetId = $packet['id'];
+            if ($packetType === null) $packetType = $packet['type'];
+
+            $response .= rtrim($packet['body'], "\x00");
+
+            // If less than 4096, it's likely the last packet
+            if ($size < 4096) {
+                break;
+            }
+        }
+
+        return [
+            'id' => $packetId ?? 0,
+            'type' => $packetType ?? 0,
+            'body' => $response
+        ];
     }
 }
